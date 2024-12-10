@@ -1,39 +1,35 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import { Request, Response, ErrorRequestHandler, NextFunction } from 'express';
-import { ErrorHandler, handleError, Unauthorized } from '../utils/error-handler';
+import { ErrorHandler, handleError, InternalError, Unauthorized } from '../utils/error-handler';
 import { validationResult } from 'express-validator';
-import jwt from 'jsonwebtoken';
+import jwt, { JsonWebTokenError } from 'jsonwebtoken';
+import { UserPayload } from '../types';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 
 /**
- * Проверить токен пользователя и Content type
+ * Метод для проверки Bearer токена пользователя
  */
-export const checkAuth = async (req: Request, res: Response, next: NextFunction) => {
-  const token = req.header('authToken');
+export const checkToken = async (req: Request, res: Response, next: NextFunction) => {
+  const token = req.header('authorization')?.split(' ')[1];
   try {
     if (!token) throw new Unauthorized('Нет токена, авторизация отклонена');
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
+    const user = jwt.verify(token, JWT_SECRET) as UserPayload;
+    req.user = user;
     next();
-  } catch (err) {
-    let error;
-    // проверяем что за ошибка
-    switch (err.name) {
-      case 'JsonWebTokenError': {
-        error = new Unauthorized('Не корректный токен. Повторно авторизуйтесь в системе.');
-        break;
+  } catch (error: unknown) {
+    if (error instanceof JsonWebTokenError) {
+      switch (error.name) {
+        case 'TokenExpiredError':
+          return handleError(new Unauthorized('Срок жизни вашего токена истёк. Повторно авторизуйтесь в системе'), next);
+        case 'JsonWebTokenError':
+          return handleError(new Unauthorized('Некорректный токен. Повторно авторизуйтесь в системе'), next);
+        default:
+          return handleError(new InternalError('Ошибка обработки токена'), next);
       }
-      case 'TokenExpiredError': {
-        error = new Unauthorized('Срок жизни вашего токена истёк. Повторно авторизуйтесь в системе.');
-        break;
-      }
-      default:
-        error = err;
     }
-
-    return handleError(error, next);
+    return handleError(error as Error | ErrorHandler, next);
   }
 };
 
